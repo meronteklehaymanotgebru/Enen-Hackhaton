@@ -1,233 +1,70 @@
-// app/api/panic/route.ts
-import { NextResponse } from "next/server";
-import { supabase } from "@/services/supabase";
-import { messaging } from "@/services/firebaseAdmin";
-import { sendSMS } from "@/services/sms";
-
-// Type definitions for this route
-type PanicRequestBody = {
-  userId: string;
-  latitude: number;
-  longitude: number;
-  message?: string | null;
-  audio?: File | null;
-};
-
-type HelperRecord = {
-  user_id: string;
-};
-
-type ContactRecord = {
-  phone: string;
-  name?: string;
-};
-
-type TokenRecord = {
-  fcm_token: string;
-};
-
-const MAX_HELPERS = 3;
+import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+import { getSignedUploadUrl } from '@/lib/helpers'
 
 export async function POST(req: Request) {
   try {
-    const formData = await req.formData();
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
 
-    // Parse and validate required fields
-    const userId = formData.get("userId") as string;
-    const latitudeStr = formData.get("latitude") as string;
-    const longitudeStr = formData.get("longitude") as string;
-    const message = formData.get("message") as string | null;
-    const audioFile = formData.get("audio") as File | null;
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
-    const latitude = parseFloat(latitudeStr);
-    const longitude = parseFloat(longitudeStr);
+    const { latitude, longitude, message } = await req.json()
 
-    if (!userId || isNaN(latitude) || isNaN(longitude)) {
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') {
       return NextResponse.json(
-        { error: "Missing required fields: userId, latitude, longitude" },
+        { error: 'Latitude and longitude are required' },
         { status: 400 }
-      );
+      )
     }
 
-    // -------------------------
-    // 1. Upload Audio (Optional)
-    // -------------------------
-    let audioUrl: string | null = null;
-
-    if (audioFile && audioFile.size > 0) {
-      const fileName = `emergency-${Date.now()}-${audioFile.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("emergency-audio")
-        .upload(fileName, audioFile, {
-          contentType: audioFile.type || 'audio/wav',
-          upsert: false
-        });
-
-      if (uploadError) {
-        console.error("Storage upload error:", uploadError);
-        throw uploadError;
-      }
-
-      const { data: urlData } = supabase.storage
-        .from("emergency-audio")
-        .getPublicUrl(fileName);
-
-      audioUrl = urlData?.publicUrl || null;
-    }
-
-    // -------------------------
-    // 2. Save Panic Alert to Database
-    // -------------------------
+    // Create panic alert
     const { data: alertData, error: insertError } = await supabase
-      .from("panic_alerts")
+      .from('panic_alerts')
       .insert({
-        user_id: userId,
-        latitude,
-        longitude,
-        status: "active",
-        message: message?.trim() || null,
-        audio_url: audioUrl
+        user_id: user.id,
+        location: `POINT(${longitude} ${latitude})`, // Note: lng lat for PostGIS
+        status: 'active',
       })
       .select()
-      .single();
+      .single()
 
     if (insertError || !alertData) {
-      console.error("Database insert error:", insertError);
-      throw insertError || new Error("Failed to create alert");
+      return NextResponse.json(
+        { error: 'Failed to create panic alert' },
+        { status: 500 }
+      )
     }
 
-    // -------------------------
-    // 3. Find Nearby Helpers (via RPC)
-    // -------------------------
-    const { data: helpers, error: helpersError } = await supabase.rpc(
-      "get_nearby_helpers",
-      {
-        panic_lat: latitude,
-        panic_lng: longitude,
-        max_helpers: MAX_HELPERS
-      }
-    );
+    // Generate signed upload URLs for 15-second chunks (assume up to 10 chunks)
+    const uploadUrls: { url: string; path: string; chunkNumber: number }[] = []
+    const bucket = 'recordings'
 
-    if (helpersError) {
-      console.warn("Helpers query warning:", helpersError);
-      // Continue anyway - helpers are optional
-    }
-
-    // -------------------------
-    // 4. Get User's Emergency Contacts
-    // -------------------------
-    const { data: contacts, error: contactsError } = await supabase
-      .from("emergency_contacts")
-      .select("phone, name")
-      .eq("user_id", userId);
-
-    if (contactsError) {
-      console.warn("Contacts query warning:", contactsError);
-    }
-
-    // -------------------------
-    // 5. Prepare Notification Content
-    // -------------------------
-    const locationLink = `https://maps.google.com/?q=${latitude},${longitude}`;
-    const alertSummary = message 
-      ? `Alert: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`
-      : audioUrl 
-        ? "Alert: Voice message received" 
-        : "Alert: Emergency SOS activated";
-
-    // -------------------------
-    // 6. Notify Helpers via FCM Push Notifications
-    // -------------------------
-    if (helpers && helpers.length > 0) {
-      const helperIds = (helpers as HelperRecord[]).map(h => h.user_id);
-
-      const { data: tokensData } = await supabase
-        .from("notification_tokens")
-        .select("fcm_token")
-        .in("user_id", helperIds);
-
-      const tokens = (tokensData as TokenRecord[])
-        ?.map(t => t.fcm_token)
-        .filter(Boolean) || [];
-
-      if (tokens.length > 0) {
-        try {
-          await messaging.sendEachForMulticast({
-            tokens,
-            notification: {
-              title: "🚨 Emergency Alert Nearby",
-              body: alertSummary,
-            },
-            data: {
-              alertId: alertData.id,
-              latitude: latitude.toString(),
-              longitude: longitude.toString(),
-              audioUrl: audioUrl || '',
-              locationLink,
-              type: 'emergency_alert'
-            }
-          });
-          console.log(`✅ FCM sent to ${tokens.length} helpers`);
-        } catch (fcmError) {
-          console.error("FCM send error:", fcmError);
-          // Continue - FCM failure shouldn't block SMS
-        }
+    for (let i = 1; i <= 10; i++) {
+      const path = `panic-${alertData.id}/chunk-${i}.webm` // or appropriate format
+      try {
+        const signedUrl = await getSignedUploadUrl(bucket, path)
+        uploadUrls.push({ url: signedUrl, path, chunkNumber: i })
+      } catch (error) {
+        console.error(`Failed to generate URL for chunk ${i}:`, error)
+        // Continue with available URLs
       }
     }
 
-    // -------------------------
-    // 7. Send SMS to Emergency Contacts via Africa's Talking
-    // -------------------------
-    if (contacts && contacts.length > 0) {
-      let smsText = `ALEWLSH ALERT: Help needed. Location: ${locationLink}`;
-      
-      if (message && message.trim()) {
-        smsText += ` | Message: ${message.trim()}`;
-      }
-      if (audioUrl) {
-        smsText += ` | Audio: ${audioUrl}`;
-      }
+    // TODO: Send notifications to helpers and contacts (similar to existing logic, but update to use new client)
 
-      // Send to each contact
-      for (const contact of contacts as ContactRecord[]) {
-        if (contact.phone && contact.phone.startsWith('+')) {
-          try {
-            await sendSMS(contact.phone, smsText);
-            console.log(`✅ SMS sent to ${contact.phone}`);
-          } catch (smsError) {
-            console.error(`SMS error for ${contact.phone}:`, smsError);
-            // Continue to next contact
-          }
-        }
-      }
-    }
-
-    // -------------------------
-    // 8. Return Success Response
-    // -------------------------
     return NextResponse.json({
-      success: true,
       alertId: alertData.id,
-      notified: {
-        helpers: helpers?.length || 0,
-        contacts: contacts?.length || 0
-      },
-      location: { latitude, longitude },
-      hasAudio: !!audioUrl,
-      hasMessage: !!message?.trim()
-    }, { status: 200 });
+      uploadUrls,
+    })
 
   } catch (error) {
-    console.error("❌ PANIC ROUTE ERROR:", error);
-    
+    console.error('Panic POST error:', error)
     return NextResponse.json(
-      { 
-        success: false, 
-        error: error instanceof Error ? error.message : "Internal server error",
-        timestamp: new Date().toISOString()
-      },
+      { error: 'Server error' },
       { status: 500 }
-    );
+    )
   }
 }
