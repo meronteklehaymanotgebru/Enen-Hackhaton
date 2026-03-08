@@ -119,7 +119,7 @@ export default function ActiveAlertsPage() {
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
         >
-          <h1 className="text-3xl md:text-4xl font-black text-white mb-2">
+          <h1 className="text-4xl md:text-6xl lg:text-7xl font-black bg-gradient-to-r from-purple-400 via-fuchsia-500 to-indigo-600 bg-clip-text text-transparent mb-4 drop-shadow-2xl">
             Active Emergency Alerts
           </h1>
           <p className="text-gray-400">
