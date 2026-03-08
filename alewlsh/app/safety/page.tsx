@@ -1,7 +1,8 @@
 // app/safe-path/page.tsx
 "use client";
-
-import { motion } from 'framer-motion';
+export const dynamic = 'force-dynamic'
+import { useRef } from 'react'; 
+import { motion, AnimatePresence } from 'framer-motion';
 import { useEffect, useState, useCallback, ReactNode } from 'react';
 import { 
   MapContainer, 
@@ -11,11 +12,13 @@ import {
   Polyline, 
   useMap,
   useMapEvents,
-  CircleMarker as LeafletCircleMarker
 } from 'react-leaflet';
 import L, { LatLngExpression, LeafletMouseEvent, DivIcon } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { FaShieldAlt, FaExclamationTriangle, FaRoute, FaMapMarkerAlt, FaPlay, FaRedo } from 'react-icons/fa';
+import { FaShieldAlt, FaExclamationTriangle, FaRoute, FaMapMarkerAlt, FaRedo, FaTimes, FaPaperPlane, FaLightbulb } from 'react-icons/fa';
+import { RiWomenLine } from 'react-icons/ri';
+import { useUserStore } from '@/utils/userStore';
+import { getSafeRoute, RouteSegment } from '@/services/routing';
 
 // Fix Leaflet default marker icons (type-safe)
 const defaultIcon = L.Icon.Default.prototype as { _getIconUrl?: () => string | null };
@@ -31,6 +34,10 @@ interface RiskData {
   risk: number;
   color: 'green' | 'orange' | 'red';
   nearestZone?: string;
+  aiMultiplier?: number;
+  aiReason?: string;
+  aiConfidence?: number;
+  aiSafetyTip?: string;
 }
 
 interface HeatmapPoint {
@@ -43,6 +50,7 @@ interface PathPoint {
   lat: number;
   lng: number;
   label?: string;
+  risk?: RiskData;
 }
 
 interface KnownZone {
@@ -86,26 +94,27 @@ const distanceKm = (lat1: number, lng1: number, lat2: number, lng2: number): num
   return 2 * R * Math.asin(Math.sqrt(a));
 };
 
-// === Component: Map Click Handler ===
+// === Component: Map Click Handler (FIXED) ===
 interface LocationSelectorProps {
   onLocationSelect: (lat: number, lng: number, type: 'start' | 'end') => void;
-  start: PathPoint | null;
-  end: PathPoint | null;
+  selectionMode: 'start' | 'end' | null;
 }
 
 const LocationSelector = ({ 
   onLocationSelect, 
-  start, 
-  end 
+  selectionMode 
 }: LocationSelectorProps): null => {
-  const [selectionMode, setSelectionMode] = useState<'start' | 'end' | null>(null);
   
   useMapEvents({
-    click(e: LeafletMouseEvent) {
-      if (selectionMode) {
+    click: (e: LeafletMouseEvent) => {
+      if (!selectionMode) return;
+      
+      // Small delay to ensure state sync
+      setTimeout(() => {
         onLocationSelect(e.latlng.lat, e.latlng.lng, selectionMode);
-        setSelectionMode(null);
-      }
+      }, 50);
+      
+      return null;
     }
   });
 
@@ -161,9 +170,266 @@ const CircleMarker = ({
     </Marker>
   );
 };
+// === Component: Safety Sister Bot Chat (Enhanced) ===
+// === Component: Safety Sister Bot Chat (Properly Positioned) ===
+interface SafetyBotProps {
+  location?: { lat: number; lng: number };
+  isPremium: boolean;
+}
 
+const SafetyBot = ({ location, isPremium }: SafetyBotProps) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [showTooltip, setShowTooltip] = useState(true);
+  const [messages, setMessages] = useState<Array<{role: 'user' | 'bot', content: string}>>([
+    { 
+      role: 'bot', 
+      content: isPremium 
+        ? "Hi love 💜 I'm Safety Sister, your AI companion. I'm always here to help you stay safe. What's on your mind?" 
+        : "Hi love 💜 I'm Safety Sister. Upgrade to Premium for personalized, AI-powered safety advice. For now, I'm here to listen. What's on your mind?"
+    }
+  ]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const tooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Context-aware suggested prompts for Safe Path page
+  const examplePrompts = [
+    "Is this route safe right now?",
+    "What's the risk level at my location?",
+    "How is risk score calculated?",
+    "Should I avoid this area?",
+    "What if I feel followed?",
+    "Can you suggest a safer alternative?",
+  ];
+
+  // Auto-scroll to newest message
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Tooltip visibility logic
+  useEffect(() => {
+    if (isOpen) {
+      setShowTooltip(false);
+      if (tooltipTimeoutRef.current) clearTimeout(tooltipTimeoutRef.current);
+    } else {
+      setShowTooltip(true);
+      tooltipTimeoutRef.current = setTimeout(() => setShowTooltip(false), 10000);
+    }
+    return () => { if (tooltipTimeoutRef.current) clearTimeout(tooltipTimeoutRef.current); };
+  }, [isOpen]);
+
+  const handleSend = async () => {
+    if (!input.trim() || loading) return;
+    const userMessage = input.trim();
+    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    setInput('');
+    setLoading(true);
+    setShowTooltip(false);
+
+    try {
+      const response = await fetch('/api/safety/bot-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userMessage, location, isPremium })
+      });
+      const data = await response.json();
+      setMessages(prev => [...prev, { role: 'bot', content: data.reply }]);
+    } catch (error) {
+      setMessages(prev => [...prev, { 
+        role: 'bot', 
+        content: "I'm having trouble connecting right now 💜 If you're in immediate danger, please use the SOS button. I'm always here for you when you need me. ✨" 
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      {/* === BOT ICON WITH TOOLTIP (Bottom-Right Corner) === */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end pointer-events-none">
+        
+        {/* ✅ Tooltip: "Safety Sister always here for you 💜" */}
+        <AnimatePresence>
+          {showTooltip && !isOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: 8, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.95 }}
+              transition={{ duration: 0.2 }}
+              className="mb-3 px-4 py-2.5 bg-gradient-to-r from-pink-600 to-purple-600 text-white text-xs font-medium rounded-2xl shadow-xl whitespace-nowrap pointer-events-auto border border-pink-400/40"
+              style={{ 
+                boxShadow: '0 8px 32px rgba(139, 20, 135, 0.4)',
+                minWidth: '200px',
+                maxWidth: '240px'
+              }}
+            >
+              Safety Sister always here for you 💜
+              
+              {/* ✅ Arrow pointing DOWN to bot icon */}
+              <div 
+                className="absolute bottom-[-8px] right-5 w-4 h-4 bg-gradient-to-br from-pink-600 to-purple-600 rotate-45 border-r border-b border-pink-400/40"
+                style={{ 
+                  boxShadow: '4px 4px 12px rgba(0,0,0,0.2)',
+                  borderBottomRightRadius: '4px'
+                }}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ✅ Bot Icon Button (pointer-events: auto so it's clickable) */}
+        <motion.button
+          onClick={() => {
+            setIsOpen(true);
+            setShowTooltip(false);
+          }}
+          className="pointer-events-auto w-14 h-14 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 text-white flex items-center justify-center shadow-2xl border-2 border-pink-300/60 hover:scale-110 active:scale-95 transition-transform"
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.95 }}
+          aria-label="Open Safety Sister chat"
+        >
+          <RiWomenLine className="w-7 h-7 drop-shadow-lg" />
+        </motion.button>
+      </div>
+
+      {/* === CHAT MODAL (Opens Above Bot) === */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 20, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.98 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="fixed bottom-24 right-6 z-50 w-80 md:w-96 bg-gray-900/95 backdrop-blur-xl rounded-2xl border border-pink-500/40 shadow-2xl overflow-hidden flex flex-col"
+            style={{ 
+              maxHeight: '70vh',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(236, 72, 153, 0.2)'
+            }}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-pink-500/30 flex-shrink-0 bg-gradient-to-r from-pink-600/10 to-purple-600/10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center">
+                  <RiWomenLine className="w-5 h-5 text-white" />
+                </div>
+                <span className="font-bold text-white">Safety Sister</span>
+                {!isPremium && (
+                  <span className="text-[10px] bg-yellow-500/25 text-yellow-200 px-2 py-0.5 rounded-full border border-yellow-500/40">Premium</span>
+                )}
+              </div>
+              <button 
+                onClick={() => setIsOpen(false)} 
+                className="text-gray-400 hover:text-white transition-colors p-1 hover:bg-white/10 rounded-lg"
+                aria-label="Close chat"
+              >
+                <FaTimes className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Messages Container */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-black/20">
+              {messages.map((msg, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, x: msg.role === 'user' ? 20 : -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div className={`max-w-[85%] p-3.5 rounded-2xl text-sm ${
+                    msg.role === 'user' 
+                      ? 'bg-gradient-to-r from-pink-600 to-purple-600 text-white rounded-br-none shadow-lg' 
+                      : 'bg-gray-800/80 text-gray-100 rounded-bl-none border border-gray-700/50'
+                  }`}>
+                    {msg.content}
+                  </div>
+                </motion.div>
+              ))}
+              
+              {/* Animated Typing Indicator */}
+              {loading && (
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="flex justify-start"
+                >
+                  <div className="bg-gray-800/80 text-gray-400 px-4 py-3 rounded-2xl rounded-bl-none text-sm flex items-center gap-1.5 border border-gray-700/50">
+                    {[0, 0.2, 0.4].map((delay, i) => (
+                      <motion.div 
+                        key={i}
+                        className="w-2 h-2 bg-gray-400 rounded-full"
+                        animate={{ scale: [1, 1.4, 1], opacity: [1, 0.6, 1] }}
+                        transition={{ duration: 1, repeat: Infinity, delay }}
+                      />
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+              
+              {/* Auto-scroll anchor */}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Example Prompts */}
+            {!loading && messages.length <= 2 && (
+              <div className="px-4 pb-3 flex-shrink-0">
+                <div className="flex items-center gap-1.5 text-[11px] text-gray-400 mb-2.5">
+                  <FaLightbulb className="w-3 h-3 text-yellow-400" />
+                  <span>Ask about your route:</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {examplePrompts.slice(0, 4).map((prompt, i) => (
+                    <motion.button
+                      key={i}
+                      onClick={() => {
+                        setInput(prompt);
+                        setShowTooltip(false);
+                      }}
+                      className="text-[11px] bg-gradient-to-r from-pink-500/20 to-purple-500/20 hover:from-pink-500/30 hover:to-purple-500/30 text-pink-200 px-3 py-1.5 rounded-full border border-pink-500/40 transition-all hover:scale-105 active:scale-95"
+                      whileHover={{ scale: 1.03 }}
+                      whileTap={{ scale: 0.98 }}
+                    >
+                      {prompt}
+                    </motion.button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Input Area */}
+            <div className="p-3 border-t border-pink-500/30 flex gap-2.5 flex-shrink-0 bg-black/30">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                placeholder="Ask about safety..."
+                className="flex-1 bg-gray-800/80 text-white text-sm px-4 py-2.5 rounded-xl border border-gray-700/60 focus:outline-none focus:border-pink-500 focus:ring-2 focus:ring-pink-500/30 transition-all placeholder-gray-500"
+                disabled={loading}
+              />
+              <motion.button
+                onClick={handleSend}
+                disabled={loading || !input.trim()}
+                className="p-2.5 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 disabled:opacity-50 disabled:hover:from-pink-600 disabled:hover:to-purple-600 text-white rounded-xl transition-all shadow-lg"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                aria-label="Send message"
+              >
+                <FaPaperPlane className="w-4 h-4" />
+              </motion.button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+};
 // === Main Component ===
 export default function SafePathPage() {
+  const { user } = useUserStore();
+
   const [heatmapData, setHeatmapData] = useState<HeatmapPoint[]>([]);
   const [riskData, setRiskData] = useState<RiskData | null>(null);
   const [startPoint, setStartPoint] = useState<PathPoint | null>(null);
@@ -172,11 +438,11 @@ export default function SafePathPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [pathLoading, setPathLoading] = useState<boolean>(false);
   const [selectionMode, setSelectionMode] = useState<'start' | 'end' | null>(null);
+  const [startRisk, setStartRisk] = useState<RiskData | null>(null);
+  const [endRisk, setEndRisk] = useState<RiskData | null>(null);
 
-  // Default: Addis Ababa center
   const DEFAULT_CENTER: [number, number] = [9.03, 38.74];
 
-  // === Known Safe/Danger Zones (for demo) ===
   const knownZones: KnownZone[] = [
     { pos: [9.017, 38.825], name: 'Megenagna', risk: 4, type: 'danger' },
     { pos: [9.032, 38.746], name: 'Piassa', risk: 3, type: 'caution' },
@@ -185,7 +451,7 @@ export default function SafePathPage() {
     { pos: [9.005, 38.763], name: 'Kazanchis', risk: 1, type: 'safe' },
   ];
 
-  // === Fetch Heatmap Data on Mount ===
+  // Fetch Heatmap Data on Mount
   useEffect(() => {
     const fetchHeatmap = async () => {
       try {
@@ -199,84 +465,113 @@ export default function SafePathPage() {
     fetchHeatmap();
   }, []);
 
-  // === Check Risk for a Location ===
-  const checkRisk = useCallback(async (lat: number, lng: number) => {
+  // Check Risk for a Location (with AI enhancement)
+  const checkRisk = useCallback(async (lat: number, lng: number, type: 'start' | 'end') => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/safety/risk-score?lat=${lat}&lng=${lng}`);
+      const res = await fetch(`/api/safety/risk-score?lat=${lat}&lng=${lng}&premium=${user?.isPremium}`);
       const data: RiskData = await res.json();
+      if (type === 'start') {
+        setStartRisk(data);
+      } else {
+        setEndRisk(data);
+      }
       setRiskData(data);
     } catch (err) {
       console.error('Risk check failed:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.isPremium]);
 
-  // === Handle Location Selection ===
+  // Premium Check - render paywall if not premium
+  if (!user?.isPremium) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
+        <div className="text-center max-w-md p-6">
+          <FaShieldAlt className="w-16 h-16 mx-auto mb-4 text-yellow-400" />
+          <h1 className="text-2xl font-bold mb-2">Premium Feature</h1>
+          <p className="mb-4 text-gray-300">Upgrade to premium to access Safe Pass with AI risk analysis, real-time routing, and Safety Sister chat.</p>
+          <ul className="text-left text-sm text-gray-400 mb-6 space-y-2">
+            <li>• AI-powered risk insights with confidence scores</li>
+            <li>• Real road-based route planning</li>
+            <li>• Safety Sister chat for personalized advice</li>
+            <li>• Unlimited emergency contacts</li>
+          </ul>
+          <button className="bg-yellow-500 hover:bg-yellow-400 text-black px-6 py-3 rounded-xl font-semibold transition-colors">
+            Upgrade for 99 ETB/month
+          </button>
+          <p className="text-xs text-gray-500 mt-3">Core safety features (SOS, alerts) remain free forever.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Handle Location Selection
   const handleLocationSelect = (lat: number, lng: number, type: 'start' | 'end') => {
     if (type === 'start') {
       setStartPoint({ lat, lng, label: 'Start' });
-      checkRisk(lat, lng);
+      checkRisk(lat, lng, 'start');
     } else {
       setEndPoint({ lat, lng, label: 'Destination' });
-      checkRisk(lat, lng);
+      checkRisk(lat, lng, 'end');
     }
+    setSelectionMode(null);
   };
 
-  // === Calculate Safe Path (Simplified A* avoiding high-risk zones) ===
+  // Calculate Safe Path with Real Routing
   const calculateSafePath = async () => {
     if (!startPoint || !endPoint) return;
     
     setPathLoading(true);
     
     try {
-      // Simplified path: straight line with waypoints avoiding risk >= 4 zones
-      const path: PathPoint[] = [startPoint];
+      const route = await getSafeRoute(
+        [startPoint.lat, startPoint.lng],
+        [endPoint.lat, endPoint.lng],
+        heatmapData,
+        true // avoidHighRisk
+      );
       
-      // Generate intermediate points (for demo: 5 waypoints)
-      const steps = 5;
-      for (let i = 1; i < steps; i++) {
-        const t = i / steps;
-        const lat = startPoint.lat + (endPoint.lat - startPoint.lat) * t;
-        const lng = startPoint.lng + (endPoint.lng - startPoint.lng) * t;
-        
-        // Check if this point is in a high-risk zone
-        const nearbyRisk = heatmapData.filter(h => 
-          distanceKm(lat, lng, h.lat, h.lng) < 0.5 && h.risk >= 4
-        );
-        
-        // If high risk nearby, offset the path slightly
-        if (nearbyRisk.length > 0) {
-          path.push({ 
-            lat: lat + (Math.random() - 0.5) * 0.02, 
-            lng: lng + (Math.random() - 0.5) * 0.02,
-            label: `Waypoint ${i}`
-          });
-        } else {
-          path.push({ lat, lng });
+      // Enrich path with risk data
+      const enrichedPath: PathPoint[] = await Promise.all(route.map(async (point) => {
+        try {
+          const res = await fetch(`/api/safety/risk-score?lat=${point.lat}&lng=${point.lng}&premium=${user?.isPremium}`);
+          const risk: RiskData = await res.json();
+          return { lat: point.lat, lng: point.lng, risk };
+        } catch {
+          return { lat: point.lat, lng: point.lng };
         }
-      }
+      }));
       
-      path.push(endPoint);
-      setSafePath(path);
-      
-      // Check risk at destination
-      checkRisk(endPoint.lat, endPoint.lng);
+      setSafePath(enrichedPath);
       
     } catch (err) {
       console.error('Path calculation failed:', err);
+      // Fallback to simple path
+      const fallback: PathPoint[] = [];
+      const steps = 10;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        fallback.push({
+          lat: startPoint.lat + (endPoint.lat - startPoint.lat) * t,
+          lng: startPoint.lng + (endPoint.lng - startPoint.lng) * t
+        });
+      }
+      setSafePath(fallback);
     } finally {
       setPathLoading(false);
     }
   };
 
-  // === Reset ===
+  // Reset
   const resetPath = () => {
     setStartPoint(null);
     setEndPoint(null);
     setSafePath([]);
     setRiskData(null);
+    setStartRisk(null);
+    setEndRisk(null);
   };
 
   return (
@@ -289,7 +584,7 @@ export default function SafePathPage() {
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
         >
-          <h1 className="text-4xl md:text-6xl lg:text-7xl font-black bg-gradient-to-r from-green-400 via-yellow-400 to-red-500 bg-clip-text text-transparent mb-4 drop-shadow-2xl">
+          <h1 className="text-4xl md:text-6xl lg:text-7xl font-black bg-gradient-to-r from-purple-400 via-fuchsia-500 to-indigo-600 bg-clip-text text-transparent mb-4 drop-shadow-2xl">
             Safe Path Planner
           </h1>
           <p className="text-lg md:text-xl text-gray-300 max-w-2xl mx-auto">
@@ -429,11 +724,32 @@ export default function SafePathPage() {
                   </div>
                   <div className="text-center">
                     <p className={`text-2xl font-black capitalize ${getRiskTextColor(riskData.risk)}`}>
-                      {riskData.color === 'green' ? '✅ Safe' : 
-                       riskData.color === 'orange' ? '⚠️ Caution' : '🚫 Danger'}
+                      {riskData.color === 'green' ? 'Safe' : 
+                       riskData.color === 'orange' ? 'Caution' : 'Danger'}
                     </p>
                     <p className="text-gray-400 text-sm mt-1">Risk Score: {riskData.risk}/5</p>
                   </div>
+                  
+                  {/* AI Reasoning Section (Premium only) */}
+                  {riskData.aiMultiplier && riskData.aiMultiplier !== 1 && (
+                    <motion.div 
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      className="mt-3 p-3 bg-blue-500/10 border border-blue-500/30 rounded-xl"
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-blue-400">🤖</span>
+                        <span className="text-sm font-medium text-blue-300">AI Insight</span>
+                        <span className="text-xs text-blue-400/70">
+                          Confidence: {(riskData.aiConfidence! * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-300 mb-2">{riskData.aiReason}</p>
+                      {riskData.aiSafetyTip && (
+                        <p className="text-xs text-green-400 italic">💡 {riskData.aiSafetyTip}</p>
+                      )}
+                    </motion.div>
+                  )}
                 </div>
               ) : (
                 <p className="text-gray-400 text-sm text-center">Select a location to check safety</p>
@@ -483,18 +799,27 @@ export default function SafePathPage() {
                 zoom={12}
                 style={{ height: '100%', width: '100%', borderRadius: '1rem' }}
                 className="rounded-2xl"
+                preferCanvas={true}
               >
                 <TileLayer
                   attribution='&copy; OpenStreetMap contributors'
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
                 
-                {/* Click Handler */}
+                {/* LocationSelector - MUST be inside MapContainer */}
                 <LocationSelector 
                   onLocationSelect={handleLocationSelect}
-                  start={startPoint}
-                  end={endPoint}
+                  selectionMode={selectionMode}
                 />
+                
+                {/* Selection Mode Hint */}
+                {selectionMode && (
+                  <Popup position={DEFAULT_CENTER} autoClose={false} closeOnClick={false}>
+                    <div className="text-center text-sm">
+                      👆 Click anywhere to set <strong>{selectionMode}</strong> point
+                    </div>
+                  </Popup>
+                )}
                 
                 {/* Fit Map to Points */}
                 {(startPoint || endPoint) && (
@@ -525,18 +850,29 @@ export default function SafePathPage() {
                   </Marker>
                 )}
 
-                {/* Safe Path Line */}
+                {/* Safe Path Line - Risk-colored segments */}
                 {safePath.length > 1 && (
-                  <Polyline
-                    positions={safePath.map(p => [p.lat, p.lng] as LatLngExpression)}
-                    color="#22c55e"
-                    weight={4}
-                    opacity={0.9}
-                    dashArray="5, 5"
-                  />
+                  <>
+                    {safePath.slice(0, -1).map((point, i) => {
+                      const nextPoint = safePath[i + 1];
+                      const segmentRisk = point.risk?.risk || 0;
+                      const color = segmentRisk >= 4 ? '#ef4444' : segmentRisk >= 2 ? '#f97316' : '#22c55e';
+                      
+                      return (
+                        <Polyline
+                          key={i}
+                          positions={[[point.lat, point.lng], [nextPoint.lat, nextPoint.lng]] as [LatLngExpression, LatLngExpression]}
+                          color={color}
+                          weight={4}
+                          opacity={0.9}
+                          dashArray={segmentRisk >= 4 ? "2, 4" : undefined}
+                        />
+                      );
+                    })}
+                  </>
                 )}
 
-                {/* Heatmap Points (as colored circles) */}
+                {/* Heatmap Points */}
                 {heatmapData.map((point: HeatmapPoint, i: number) => (
                   <CircleMarker
                     key={i}
@@ -567,6 +903,38 @@ export default function SafePathPage() {
                     </Popup>
                   </Marker>
                 ))}
+
+                {/* Start Point with Risk Color */}
+                {startPoint && startRisk && (
+                  <Marker position={[startPoint.lat, startPoint.lng] as LatLngExpression} icon={L.divIcon({
+                    className: 'custom-marker',
+                    html: `<div style="background-color: ${startRisk.color === 'red' ? '#ef4444' : startRisk.color === 'orange' ? '#f97316' : '#22c55e'}; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.3);"></div>`,
+                    iconSize: [20, 20],
+                    iconAnchor: [10, 10]
+                  })}>
+                    <Popup>
+                      <p className="font-bold">Start Point</p>
+                      <p>Risk: {startRisk.risk}/5 ({startRisk.color})</p>
+                      {startRisk.aiReason && <p className="text-xs mt-1">🤖 {startRisk.aiReason}</p>}
+                    </Popup>
+                  </Marker>
+                )}
+
+                {/* End Point with Risk Color */}
+                {endPoint && endRisk && (
+                  <Marker position={[endPoint.lat, endPoint.lng] as LatLngExpression} icon={L.divIcon({
+                    className: 'custom-marker',
+                    html: `<div style="background-color: ${endRisk.color === 'red' ? '#ef4444' : endRisk.color === 'orange' ? '#f97316' : '#22c55e'}; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.3);"></div>`,
+                    iconSize: [20, 20],
+                    iconAnchor: [10, 10]
+                  })}>
+                    <Popup>
+                      <p className="font-bold">End Point</p>
+                      <p>Risk: {endRisk.risk}/5 ({endRisk.color})</p>
+                      {endRisk.aiReason && <p className="text-xs mt-1">🤖 {endRisk.aiReason}</p>}
+                    </Popup>
+                  </Marker>
+                )}
               </MapContainer>
             </div>
 
@@ -589,22 +957,14 @@ export default function SafePathPage() {
           </motion.section>
         </div>
 
-        {/* Emergency SOS Button (Fixed Bottom) */}
-        <motion.div 
-          className="fixed bottom-6 right-6 z-50"
-          initial={{ opacity: 0, scale: 0.8 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.5 }}
-        >
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-gradient-to-br from-red-600 to-red-800 text-white flex items-center justify-center shadow-2xl border-4 border-red-400/50 hover:shadow-red-500/50 transition-all"
-            onClick={() => window.location.href = '/emergency'}
-          >
-            <FaExclamationTriangle className="w-8 h-8 md:w-10 md:h-10 drop-shadow-2xl" />
-          </motion.button>
-        </motion.div>
+        {/* Safety Sister Bot */}
+        <SafetyBot 
+          location={startPoint || endPoint ? { 
+            lat: (startPoint?.lat || endPoint?.lat)!, 
+            lng: (startPoint?.lng || endPoint?.lng)! 
+          } : undefined}
+          isPremium={user?.isPremium || false}
+        />
       </div>
     </div>
   );
