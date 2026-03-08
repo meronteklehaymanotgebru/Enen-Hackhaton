@@ -1,0 +1,1181 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Alewlsh Emergency Response API",
+    "description": "API documentation for the Alewlsh emergency response and safety platform. This API provides endpoints for user authentication, panic alerts, emergency contacts, safety features, and police coordination.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Alewlsh Development Team"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Development server"
+    },
+    {
+      "url": "https://your-production-url.com",
+      "description": "Production server"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        },
+        "required": ["error"]
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "User ID"
+          },
+          "phone": {
+            "type": "string",
+            "description": "User phone number"
+          },
+          "nickname": {
+            "type": "string",
+            "description": "User nickname"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Account creation timestamp"
+          }
+        }
+      },
+      "EmergencyContact": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "relationship": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": ["name", "phone"]
+      },
+      "PanicAlert": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "location": {
+            "type": "string",
+            "description": "PostGIS point geometry"
+          },
+          "latitude": {
+            "type": "number",
+            "format": "float"
+          },
+          "longitude": {
+            "type": "number",
+            "format": "float"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "resolved", "accepted"]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "HeatmapPoint": {
+        "type": "object",
+        "properties": {
+          "lat": {
+            "type": "number",
+            "format": "float"
+          },
+          "lng": {
+            "type": "number",
+            "format": "float"
+          },
+          "risk": {
+            "type": "number",
+            "format": "float",
+            "description": "Risk multiplier based on time of day"
+          }
+        }
+      },
+      "Helper": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "panic_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "helper_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "accepted", "declined"]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/auth/login": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "User login",
+        "description": "Authenticate user with phone number and password",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phone": {
+                    "type": "string",
+                    "description": "User phone number",
+                    "example": "0911111111"
+                  },
+                  "password": {
+                    "type": "string",
+                    "description": "User password",
+                    "example": "testpassword"
+                  }
+                },
+                "required": ["phone", "password"],
+                "example": {
+                  "phone": "0911111111",
+                  "password": "testpassword"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "userId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "User registration",
+        "description": "Register a new user account with Supabase Auth",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "User email address"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 6,
+                    "description": "User password"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Full name"
+                  },
+                  "phone": {
+                    "type": "string",
+                    "description": "Phone number"
+                  },
+                  "birthDate": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "Birth date (YYYY-MM-DD)"
+                  },
+                  "contacts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "phone": {
+                          "type": "string"
+                        },
+                        "relationship": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["name", "phone"]
+                    },
+                    "minItems": 1,
+                    "description": "Emergency contacts"
+                  }
+                },
+                "required": ["email", "password", "name", "phone", "birthDate", "contacts"],
+                "example": {
+                  "email": "user@example.com",
+                  "password": "securepassword123",
+                  "name": "John Doe",
+                  "phone": "0912345678",
+                  "birthDate": "1990-01-01",
+                  "contacts": [
+                    {
+                      "name": "Jane Doe",
+                      "phone": "0911111111",
+                      "relationship": "spouse"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Registration successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "user": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "email": {
+                          "type": "string",
+                          "format": "email"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or registration failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/emergency-contacts": {
+      "get": {
+        "tags": ["Emergency Contacts"],
+        "summary": "Get emergency contacts",
+        "description": "Retrieve all emergency contacts for the authenticated user",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {
+            "description": "Emergency contacts retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "contacts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/EmergencyContact"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Emergency Contacts"],
+        "summary": "Add emergency contact",
+        "description": "Add a new emergency contact for the authenticated user",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Contact name"
+                  },
+                  "phone": {
+                    "type": "string",
+                    "description": "Contact phone number"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "Contact email (optional)"
+                  },
+                  "relationship": {
+                    "type": "string",
+                    "description": "Relationship to user (optional)"
+                  }
+                },
+                "required": ["name", "phone"],
+                "example": {
+                  "name": "Emergency Contact",
+                  "phone": "0911111111",
+                  "email": "contact@example.com",
+                  "relationship": "friend"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Emergency contact added successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "contact": {
+                      "$ref": "#/components/schemas/EmergencyContact"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/panic": {
+      "post": {
+        "tags": ["Panic Alerts"],
+        "summary": "Create panic alert",
+        "description": "Create a new panic alert with location and generate upload URLs for audio recordings",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "latitude": {
+                    "type": "number",
+                    "format": "float",
+                    "description": "Latitude coordinate"
+                  },
+                  "longitude": {
+                    "type": "number",
+                    "format": "float",
+                    "description": "Longitude coordinate"
+                  },
+                  "message": {
+                    "type": "string",
+                    "description": "Optional panic message"
+                  }
+                },
+                "required": ["latitude", "longitude"],
+                "example": {
+                  "latitude": 9.03,
+                  "longitude": 38.74,
+                  "message": "I need help!"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Panic alert created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "alert": {
+                      "$ref": "#/components/schemas/PanicAlert"
+                    },
+                    "uploadUrls": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "url": {
+                            "type": "string",
+                            "description": "Signed upload URL"
+                          },
+                          "path": {
+                            "type": "string",
+                            "description": "Storage path"
+                          },
+                          "chunkNumber": {
+                            "type": "integer",
+                            "description": "Audio chunk number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/panic/accept": {
+      "post": {
+        "tags": ["Panic Alerts"],
+        "summary": "Accept panic alert",
+        "description": "Accept a panic alert as a helper",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "panicId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Panic alert ID"
+                  }
+                },
+                "required": ["panicId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Panic alert accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/panic/active": {
+      "get": {
+        "tags": ["Panic Alerts"],
+        "summary": "Get active panic alerts",
+        "description": "Get nearby active panic alerts for potential helpers",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {
+            "name": "lat",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "User latitude"
+          },
+          {
+            "name": "lng",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "User longitude"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active panic alerts retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "alerts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PanicAlert"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/panic/history": {
+      "get": {
+        "tags": ["Panic Alerts"],
+        "summary": "Get panic alert history",
+        "description": "Get user's panic alert history",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {
+            "description": "Panic alert history retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "alerts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PanicAlert"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/panic/resolve": {
+      "post": {
+        "tags": ["Panic Alerts"],
+        "summary": "Resolve panic alert",
+        "description": "Resolve a panic alert",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "panicId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Panic alert ID"
+                  }
+                },
+                "required": ["panicId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Panic alert resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/safety/heatmap": {
+      "get": {
+        "tags": ["Safety"],
+        "summary": "Get safety heatmap",
+        "description": "Get safety heatmap data with risk scores based on historical panic alerts and time of day",
+        "responses": {
+          "200": {
+            "description": "Heatmap data retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "heatmap": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/HeatmapPoint"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/safety/risk-score": {
+      "get": {
+        "tags": ["Safety"],
+        "summary": "Get location risk score",
+        "description": "Get risk score for a specific location",
+        "parameters": [
+          {
+            "name": "lat",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "Latitude"
+          },
+          {
+            "name": "lng",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "Longitude"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Risk score calculated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "riskScore": {
+                      "type": "number",
+                      "format": "float"
+                    },
+                    "factors": {
+                      "type": "object",
+                      "properties": {
+                        "timeMultiplier": {
+                          "type": "number",
+                          "format": "float"
+                        },
+                        "incidentDensity": {
+                          "type": "number",
+                          "format": "float"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing coordinates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/helpers": {
+      "get": {
+        "tags": ["Helpers"],
+        "summary": "Get panic helpers",
+        "description": "Get all helpers for a specific panic alert",
+        "parameters": [
+          {
+            "name": "panicId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Panic alert ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Helpers retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "helpers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Helper"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing panicId parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/police/alerts": {
+      "get": {
+        "tags": ["Police"],
+        "summary": "Get police alerts",
+        "description": "Get nearby active panic alerts for police officers",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {
+            "name": "lat",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "Police officer latitude"
+          },
+          {
+            "name": "lng",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "Police officer longitude"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Police alerts retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "alerts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PanicAlert"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing coordinates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Police access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-db": {
+      "get": {
+        "tags": ["Testing"],
+        "summary": "Test database connection",
+        "description": "Test endpoint to verify database connectivity and retrieve user data",
+        "responses": {
+          "200": {
+            "description": "Database connection successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/User"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-fcm": {
+      "get": {
+        "tags": ["Testing"],
+        "summary": "Test Firebase Cloud Messaging",
+        "description": "Send a test FCM notification",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "FCM device token"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FCM test successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-sms": {
+      "get": {
+        "tags": ["Testing"],
+        "summary": "Test SMS functionality",
+        "description": "Send a test SMS message",
+        "responses": {
+          "200": {
+            "description": "SMS test successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Authentication",
+      "description": "User authentication and registration endpoints"
+    },
+    {
+      "name": "Emergency Contacts",
+      "description": "Manage emergency contact information"
+    },
+    {
+      "name": "Panic Alerts",
+      "description": "Create and manage panic alerts"
+    },
+    {
+      "name": "Safety",
+      "description": "Safety features and risk assessment"
+    },
+    {
+      "name": "Helpers",
+      "description": "Helper/volunteer management for panic alerts"
+    },
+    {
+      "name": "Police",
+      "description": "Police officer specific endpoints"
+    },
+    {
+      "name": "Testing",
+      "description": "Test endpoints for development and debugging"
+    }
+  ]
+}
